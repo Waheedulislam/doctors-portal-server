@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
+const stripe = require('stripe')(process.env.STRIP_SECRET_KEY);
 
 var nodemailer = require('nodemailer');
 var sgTransport = require('nodemailer-sendgrid-transport');
@@ -15,7 +16,7 @@ app.use(cors())
 app.use(express.json())
 
 
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const { response } = require('express');
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.r3fej.mongodb.net/myFirstDatabase?retryWrites=true&w=majority`;
 const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true, serverApi: ServerApiVersion.v1 });
@@ -41,6 +42,7 @@ const emailSenderOptions = {
     }
 }
 const EmailClient = nodemailer.createTransport(sgTransport(emailSenderOptions));
+
 
 function sendAppointmentEmail(booking) {
     const { patient, patientName, treatment, date, slot } = booking;
@@ -71,7 +73,37 @@ function sendAppointmentEmail(booking) {
         }
     });
 }
+const { patient, patientName, treatment, date, slot } = booking;
 
+function paymentConfirmationEmail(booking) {
+    var email = {
+        from: process.env.EMAIL_SENDER,
+        to: patient,
+        subject: `We have received your payment  Appointment for ${treatment}is on ${date} at ${slot} is Confirmed`,
+        text: `Your payment for this  Appointment  ${treatment}is on ${date} at ${slot} is Confirmed`,
+        html: `
+        <div>
+        <p> Hello, ${patientName},</p>
+        <h3>Thank You for your payment .</h3>
+        <h3>We have received your payment </h3>
+        <p>Looking forward to seeing you on ${date} at ${slot}.</p>
+        <h3>Our Address</h3>
+        <p>Andor killa BandorBan</p>
+        <p>Bangladesh</p>
+        <a href="https://www.programming-hero.com/">unsubscribe</a>
+
+        </div>
+        `
+    };
+    EmailClient.sendMail(email, function (err, info) {
+        if (err) {
+            console.log(err);
+        }
+        else {
+            console.log('Message sent: ', info);
+        }
+    });
+}
 async function run() {
     try {
         await client.connect();
@@ -79,6 +111,7 @@ async function run() {
         const bookingCollection = client.db("doctors_portal").collection("bookings");
         const userCollection = client.db("doctors_portal").collection("users");
         const doctorCollection = client.db("doctors_portal").collection("doctors");
+        const paymentCollection = client.db("doctors_portal").collection("payments");
 
 
         const verifyAdmin = async (req, res, next) => {
@@ -113,6 +146,31 @@ async function run() {
                 return res.status(403).send({ message: 'Forbidden access' });
             }
 
+        });
+
+        app.patch('/booking/:id', verifyJWT, async (req, res) => {
+            const id = req.params.id;
+            const payment = req.body;
+            const filter = { _id: ObjectId(id) };
+            const updatedDoc = {
+                $set: {
+                    paid: true,
+                    transactionId: payment.transactionId,
+
+                }
+            }
+
+            const result = await paymentCollection.insertOne(payment)
+            const updatedBooking = await bookingCollection.updateOne(filter, updatedDoc)
+            res.send(updatedDoc);
+
+        })
+
+        app.get('/booking/:id', verifyJWT, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: ObjectId(id) };
+            const booking = await bookingCollection.findOne(query);
+            res.send(booking);
         })
 
         app.post('/bookings', async (req, res) => {
@@ -126,6 +184,18 @@ async function run() {
             console.log('sending email');
             sendAppointmentEmail(booking);
             return res.send({ success: true, result })
+        });
+
+        app.post('/create-payment-intent', verifyJWT, async (req, res) => {
+            const service = req.body;
+            const price = service.price;
+            const amount = price * 100;
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: amount,
+                currency: 'usd',
+                payment_method_types: ['card']
+            });
+            res.send({ clientSecret: paymentIntent.client_secret })
         });
 
         app.get('/services', async (req, res) => {
