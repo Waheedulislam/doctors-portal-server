@@ -73,9 +73,11 @@ function sendAppointmentEmail(booking) {
         }
     });
 }
-const { patient, patientName, treatment, date, slot } = booking;
+
 
 function paymentConfirmationEmail(booking) {
+    const { patient, patientName, treatment, date, slot } = booking;
+
     var email = {
         from: process.env.EMAIL_SENDER,
         to: patient,
